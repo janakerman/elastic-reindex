@@ -21,18 +21,21 @@ const (
 	indexA = "a"
 	indexB = "b"
 )
+var (
+	docID = 0
+)
 
 func TestReindex(t *testing.T) {
-	// 0. Delete indexes
+	// Delete indexes
 	_ = deleteIndex(indexA)
 	_ = deleteIndex(indexB)
 
-	// 1. Set primary index to index A.
+	// Set primary index to index A.
 	fmt.Println("Set the read index and primary index to index 'a'")
 	setReadIndex(indexA)
 	setPrimaryIndexTo(indexA)
 
-	// 2. Start sending documents.
+	// Start sending documents.
 	fmt.Println("Start indexing documents into index 'a'")
 	stop := make(chan struct{}, 1)
 	numSent := make(chan int)
@@ -49,44 +52,62 @@ func TestReindex(t *testing.T) {
 	}()
 	wait()
 
-	// 2. Add secondary index to start duplicating writes to the new index.
+	// Add secondary index to start duplicating writes to the new index.
 	fmt.Println("Add secondary index to start duplicating writes to index 'b'")
 	setSecondaryIndex(indexB)
 	wait()
 
-	// 3. Reindex primary into secondary
+	// Reindex primary into secondary
 	fmt.Println("Reindex 'a' into 'b'")
 	if err := reindex(indexA, indexB); err != nil {
 		t.Errorf("reindex operation failed: %v", err)
 	}
 	wait()
-	fmt.Println("Index 'a' and 'b' are in sync")
 
-	// 4. Switch read index
+	// Stop index documents to allow indexes to refresh and settle to demonstrate that indexes are in sync
+	fmt.Println("Stop indexing documents so we can see indexes settle")
+	stop <- struct{}{}
+	fmt.Println("Index 'a' and 'b' should be in sync")
+	wait()
+
+	// Back to indexing documents
+	fmt.Println("Start indexing documents again")
+	stop = make(chan struct{}, 1)
+	go func() {
+		sent, err :=  startSendingDocuments(stop)
+		assert.Nil(t, err, "failed sending documented")
+		numSent <- sent
+	}()
+	wait()
+
+	// Now you could switch the read index over to B as it is in sync with A
 	fmt.Println("Switch read index to index 'b' (could be an alias)")
 	setReadIndex(indexB)
-	wait()
 	fmt.Println("Reads are now made to index 'b'")
+	wait()
 
-	// 5. Switch the primary index and unset secondary index
+	// We can write to index B as our primary index and stop our writes to A
 	fmt.Println("Switch the primary index to index 'b'")
 	setPrimaryIndexTo(indexB)
 	setSecondaryIndex("")
-	wait()
 	fmt.Println("Primary index set to 'b'")
+	wait()
 
-	// 6. Delete the old index
+	// Now would be a good time to delete index A
+	fmt.Println("Delete index 'a'")
+	_ = deleteIndex(indexA)
+	wait()
 
-
-	// 7. Stop ingesting documents
+	// End of the example
 	fmt.Println("Stop indexing documents")
 	stop <- struct{}{}
-	sent := <- numSent
+	sent := <- numSent + <- numSent
 	wait()
 
-	// 9. Assert correctness
+	// TODO: Add some assertions!
 	require.Greater(t, sent, 0, fmt.Sprintf("no documents sent"))
 	stopLogging <- struct{}{}
+	close(stop)
 }
 
 func setReadIndex(index string) {
@@ -122,17 +143,15 @@ func startSendingDocuments(stop <- chan struct{}) (int, error) {
 	sendDoc := make(chan ingest.Document, 2 * workers)
 
 	go func() {
-		n := 0
 		for {
 			select {
 			case _ = <-stop:
 				close(sendDoc)
 				return
 			default:
-				sendDoc<-ingest.Document{ID: n, Message: fmt.Sprintf("document %d", n)}
+				sendDoc<-ingest.Document{ID: docID, Message: fmt.Sprintf("document %d", docID)}
 			}
-			time.Sleep(500 * time.Millisecond)
-			n++
+			docID++
 		}
 	}()
 
