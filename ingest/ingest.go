@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/elastic/go-elasticsearch/v7"
 	"os"
+	"strconv"
 	"sync"
 )
 
@@ -75,6 +76,7 @@ func saveToIndex(ctx context.Context, client *elasticsearch.Client, index string
 	_, err = client.Index(
 		index,
 		bytes.NewReader(b),
+		client.Index.WithDocumentID(strconv.Itoa(doc.ID)),
 		client.Index.WithContext(ctx),
 	)
 	if err != nil {

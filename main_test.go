@@ -1,7 +1,9 @@
 package main_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/elastic/go-elasticsearch/v7"
 	"github.com/janakerman/elastic-reindex/ingest"
@@ -34,20 +36,26 @@ func TestReindex(t *testing.T) {
 		assert.Nil(t, err, "failed sending documented")
 		numSent <- sent
 	}()
-
-
+	wait()
 
 	// 2. Add secondary index to start duplicating writes to the new index.
 	fmt.Println("Add secondary index to start duplicating writes to index 'b'")
-	wait()
 	setSecondaryIndex(indexB)
+	wait()
+
+
 
 	// 3. Reindex primary into secondary
+	fmt.Println("Reindex 'a' into 'b'")
+	if err := reindex(indexA, indexB); err != nil {
+		t.Errorf("reindex operation failed: %v", err)
+	}
+	wait()
+
 	// 4. Switch read index
 	// 5. Switch the primary index
 	// 6. Delete the old index
 
-	wait()
 
 	// 7. Stop ingesting documents
 	fmt.Println("Stop indexing documents")
@@ -124,6 +132,33 @@ func sendDocuments(ctx context.Context, workers int, documents <- chan ingest.Do
 	return int(numDocs), err
 }
 
-func reindex(ctx context.Context, client *elasticsearch.Client, from, to string) error {
+func reindex(from, to string) error {
+	c, err := ingest.NewESClient()
+	if err != nil {
+		return fmt.Errorf("failed to create client: %v" ,err)
+	}
+
+	type index struct {
+		Index string `json:"index"`
+	}
+	req := struct {
+		Source index `json:"source"`
+		Dest index `json:"dest"`
+	}{
+		Source: index{Index: from},
+		Dest: index{Index: to},
+	}
+
+	b, err := json.Marshal(req)
+	if err != nil {
+		return nil
+	}
+
+	_, err = c.Reindex(
+		bytes.NewBuffer(b),
+	)
+	if err != nil {
+		return err
+	}
 	return nil
 }
